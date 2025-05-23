@@ -57,7 +57,6 @@ from utils.general import (
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou
 from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, smart_inference_mode
-from utils.postprocess import handle_people_class
 
 
 def save_one_txt(predn, save_conf, shape, file):
@@ -253,13 +252,7 @@ def run(
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
         with dt[2]:
-            # 기존 코드: NMS 함수 호출
-            # preds = non_max_suppression(
-            #     preds, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls, max_det=max_det
-            # )
-            
-            # 수정된 코드: handle_people_class 함수 호출
-            preds = handle_people_class(
+            preds = non_max_suppression(
                 preds, conf_thres, iou_thres, labels=lb, multi_label=True, agnostic=single_cls, max_det=max_det
             )
 

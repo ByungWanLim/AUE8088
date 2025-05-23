@@ -1,0 +1,10 @@
+names:
+  0: person
+  1: cyclist
+  2: people
+  3: person?
+path: datasets/kaist-rgbt
+test:
+- test-all-20.txt
+train: /home/lbw/workspace/AUE8088/data/folds/fold2/train.txt
+val: /home/lbw/workspace/AUE8088/data/folds/fold2/val.txt
