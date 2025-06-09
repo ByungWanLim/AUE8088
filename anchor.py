@@ -1,6 +1,6 @@
 import torch
 
-ckpt = torch.load("runs/train/yolov5s_nc4/weights/best.pt", map_location="cpu", weights_only=False)
+ckpt = torch.load("runs/train/yolov5s_rgbt_aug/weights/best.pt", map_location="cpu", weights_only=False)
 model = ckpt['model']
 anchors = model.model[-1].anchors  # Detect layer
 
