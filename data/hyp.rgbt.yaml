@@ -8,10 +8,8 @@ warmup_momentum: 0.8
 warmup_bias_lr: 0.1
 
 # Loss balance
-# box: 0.05
-# cls: 0.5
-box: 0.2
-cls: 0.1
+box: 0.05
+cls: 0.5
 cls_pw: 1.0
 obj: 1.0
 obj_pw: 1.0
@@ -21,10 +19,8 @@ fl_gamma: 0.0          # focal loss gamma
 
 # Color augmentation (RGB만 적용됨)
 hsv_h: 0.015
-# hsv_s: 0.5
-# hsv_v: 0.3
-hsv_s: 0.7
-hsv_v: 0.4
+hsv_s: 0.5
+hsv_v: 0.3
 
 # Geometric augmentation
 degrees: 0.0
