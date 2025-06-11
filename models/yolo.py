@@ -5,7 +5,6 @@ YOLO-specific modules.
 Usage:
     $ python models/yolo.py --cfg yolov5s.yaml
 """
-
 import argparse
 import contextlib
 import math
@@ -52,6 +51,7 @@ from models.common import (
     MultiStreamC3,
     MultiStreamMaxPool2d,
     Fusion,
+    C3k2,
 )
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
