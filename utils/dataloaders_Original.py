@@ -1095,7 +1095,7 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         super().__init__(path, **kwargs)
 
         # TODO: make mosaic augmentation work
-        self.mosaic = True if is_train and self.augment else False  # ✅ mosaic 활성화
+        self.mosaic = False
 
         # Set ignore flag
         cond = self.ignore_settings['train' if is_train else 'test']
@@ -1193,155 +1193,6 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
             if not f.exists():
                 np.save(f.as_posix(), cv2.imread(self.im_files[i].format(m)))
 
-    # ✅ RGB-T Mosaic 증강 구현
-    def load_mosaic(self, index):
-        """RGB-T용 Mosaic 증강 - 4개 이미지를 조합하여 하나로 만듭니다."""
-        labels4, segments4 = [], []
-        s = self.img_size
-        yc, xc = (int(random.uniform(-x, 2 * s + x)) for x in self.mosaic_border)  # mosaic center x, y
-        indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
-        random.shuffle(indices)
-        
-        # RGB-T용 이미지 리스트 초기화 (각 모달리티별로)
-        img4 = [np.full((s * 2, s * 2, 3), 114, dtype=np.uint8) for _ in self.modalities]  # base images for each modality
-        
-        for i, index in enumerate(indices):
-            # Load image
-            imgs, _, _ = self.load_image(index)
-            h, w = imgs[0].shape[:2]  # assume both modalities have same shape
-
-            # place img in img4
-            if i == 0:  # top left
-                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
-                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
-            elif i == 1:  # top right
-                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, s * 2), yc
-                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
-            elif i == 2:  # bottom left
-                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(s * 2, yc + h)
-                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
-            elif i == 3:  # bottom right
-                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
-                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
-
-            # RGB와 Thermal 각각에 대해 처리
-            for modal_idx, img in enumerate(imgs):
-                img4[modal_idx][y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
-            
-            padw = x1a - x1b
-            padh = y1a - y1b
-
-            # Labels
-            labels = self.labels[index].copy()
-            if labels.size:
-                labels[:, 1:3] += labels[:, 3:5] / 2.0  # convert to center format
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
-            labels4.append(labels)
-
-        # Concatenate/clip labels
-        labels4 = np.concatenate(labels4, 0)
-        for x in (labels4[:, 1:],):
-            np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
-
-        return img4, labels4
-
-    # ✅ RGB-T MixUp 증강 구현
-    def mixup(self, imgs1, labels1, imgs2, labels2):
-        """RGB-T용 MixUp 증강 - 두 RGB-T 이미지를 알파 블렌딩합니다."""
-        r = np.random.beta(32.0, 32.0)  # mixup ratio, alpha=beta=32.0
-        
-        # 각 모달리티별로 MixUp 적용
-        mixed_imgs = []
-        for img1, img2 in zip(imgs1, imgs2):
-            mixed_img = (img1 * r + img2 * (1 - r)).astype(np.uint8)
-            mixed_imgs.append(mixed_img)
-        
-        # 라벨 합치기
-        mixed_labels = np.concatenate((labels1, labels2), 0)
-        
-        return mixed_imgs, mixed_labels
-
-    # ✅ RGB-T용 random_perspective 증강 구현
-    def random_perspective_rgbt(self, imgs, labels, degrees=10, translate=.1, scale=.1, shear=10, perspective=0.0, border=(0, 0)):
-        """RGB-T 이미지에 대한 랜덤 perspective 변환"""
-        height = imgs[0].shape[0] + border[0] * 2  # shape(h,w,c)
-        width = imgs[0].shape[1] + border[1] * 2
-
-        # Center
-        C = np.eye(3)
-        C[0, 2] = -imgs[0].shape[1] / 2  # x translation (pixels)
-        C[1, 2] = -imgs[0].shape[0] / 2  # y translation (pixels)
-
-        # Perspective
-        P = np.eye(3)
-        P[2, 0] = random.uniform(-perspective, perspective)  # x perspective (about y)
-        P[2, 1] = random.uniform(-perspective, perspective)  # y perspective (about x)
-
-        # Rotation and Scale
-        R = np.eye(3)
-        a = random.uniform(-degrees, degrees)
-        s = random.uniform(1 - scale, 1 + scale)
-        R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
-
-        # Shear
-        S = np.eye(3)
-        S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # x shear (deg)
-        S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # y shear (deg)
-
-        # Translation
-        T = np.eye(3)
-        T[0, 2] = random.uniform(0.5 - translate, 0.5 + translate) * width  # x translation (pixels)
-        T[1, 2] = random.uniform(0.5 - translate, 0.5 + translate) * height  # y translation (pixels)
-
-        # Combined rotation matrix
-        M = T @ S @ R @ P @ C  # order of operations (right to left) is IMPORTANT
-
-        # RGB와 Thermal 이미지에 동일한 변환 적용
-        transformed_imgs = []
-        for img in imgs:
-            if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
-                if perspective:
-                    img = cv2.warpPerspective(img, M, dsize=(width, height), borderValue=(114, 114, 114))
-                else:  # affine
-                    img = cv2.warpAffine(img, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
-            transformed_imgs.append(img)
-
-        # Transform label coordinates
-        n = len(labels)
-        if n:
-            use_segments = any(x.any() for x in labels[:, 5:])
-            new = np.zeros((n, 4))
-
-            if use_segments:  # warp segments
-                segments = labels[:, 5:].copy()
-                for i, segment in enumerate(segments):
-                    xy = np.ones((len(segment) // 2, 3))
-                    xy[:, :2] = segment.reshape(-1, 2)
-                    xy = xy @ M.T  # transform
-                    xy = xy[:, :2] / xy[:, 2:3] if perspective else xy[:, :2]  # perspective rescale or affine
-                    new[i] = segment2box(xy, width, height)
-            else:  # warp boxes
-                xy = np.ones((n * 4, 3))
-                xy[:, :2] = labels[:, [1, 2, 3, 4, 1, 4, 3, 2]].reshape(n * 4, 2)  # x1y1, x2y2, x1y2, x2y1
-                xy = xy @ M.T  # transform
-                xy = (xy[:, :2] / xy[:, 2:3] if perspective else xy[:, :2]).reshape(n, 8)  # perspective rescale or affine
-
-                # create new boxes
-                x = xy[:, [0, 2, 4, 6]]
-                y = xy[:, [1, 3, 5, 7]]
-                new = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
-
-                # clip
-                new[:, [0, 2]] = new[:, [0, 2]].clip(0, width)
-                new[:, [1, 3]] = new[:, [1, 3]].clip(0, height)
-
-            # filter candidates
-            i = box_candidates(box1=labels[:, 1:5].T * s, box2=new.T, area_thr=0.01 if use_segments else 0.10)
-            labels = labels[i]
-            labels[:, 1:5] = new[i]
-
-        return transformed_imgs, labels
-
     def __getitem__(self, index):
         """Fetches the dataset item at the given index, considering linear, shuffled, or weighted sampling."""
         index = self.indices[index]  # linear, shuffled, or image_weights
@@ -1349,132 +1200,85 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         hyp = self.hyp
         mosaic = self.mosaic and random.random() < hyp["mosaic"]
         if mosaic:
-            # ✅ RGB-T Mosaic 로드 구현
-            imgs, labels = self.load_mosaic(index)
+            raise NotImplementedError('Please make "mosaic" augmentation work!')
+
+            # TODO: Load mosaic
+            img, labels = self.load_mosaic(index)
             shapes = None
 
-            # ✅ RGB-T MixUp 증강 구현
+            # TODO: MixUp augmentation
             if random.random() < hyp["mixup"]:
-                imgs2, labels2 = self.load_mosaic(random.choice(self.indices))
-                imgs, labels = self.mixup(imgs, labels, imgs2, labels2)
-
-            # Mosaic에서도 추가 증강 적용
-            if self.augment:
-                # ✅ HSV color-space (RGB에만 적용, Thermal은 제외)
-                if len(imgs) > 1:  # visible 모달리티가 있는 경우
-                    augment_hsv(imgs[1], hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
-
-                # ✅ Flip up-down (모든 모달리티에 동일하게 적용)
-                if random.random() < hyp["flipud"]:
-                    for i in range(len(imgs)):
-                        imgs[i] = np.flipud(imgs[i])
-                    if len(labels):
-                        labels[:, 2] = 1 - labels[:, 2]
-
-                # ✅ Flip left-right (모든 모달리티에 동일하게 적용)
-                if random.random() < hyp["fliplr"]:
-                    for i in range(len(imgs)):
-                        imgs[i] = np.fliplr(imgs[i])
-                    if len(labels):
-                        labels[:, 1] = 1 - labels[:, 1]
-
-            # Mosaic 후 라벨 정규화
-            nl = len(labels)
-            if nl:
-                labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=imgs[0].shape[1], h=imgs[0].shape[0], clip=True, eps=1e-3)
+                img, labels = mixup(img, labels, *self.load_mosaic(random.choice(self.indices)))
 
         else:
             # Load image
             # hw0s: original shapes, hw1s: resized shapes
             imgs, hw0s, hw1s = self.load_image(index)
 
-            # Letterbox for each modality
-            letterboxed_imgs = []
             for ii, (img, (h0, w0), (h, w)) in enumerate(zip(imgs, hw0s, hw1s)):
                 # Letterbox
                 shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
                 img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
                 shapes = (h0, w0), (ratio, pad)  # for COCO mAP rescaling
-                letterboxed_imgs.append(img)
-            
-            imgs = letterboxed_imgs
 
-            labels = self.labels[index].copy()
-            if labels.size:  # normalized xywh to pixel xyxy format
-                labels[:, 1:3] += labels[:, 3:5] / 2.0      # (x_lefttop, y_lefttop) -> (x_center, y_center)
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * imgs[0].shape[1], ratio[1] * imgs[0].shape[0], 
-                                          padw=pad[0], padh=pad[1])
+                labels = self.labels[index].copy()
+                if labels.size:  # normalized xywh to pixel xyxy format
+                    labels[:, 1:3] += labels[:, 3:5] / 2.0      # (x_lefttop, y_lefttop) -> (x_center, y_center)
+                    labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
-            if self.augment:
-                # ✅ RGB-T 데이터 증강 구현
-                imgs, labels = self.random_perspective_rgbt(
-                    imgs,
-                    labels,
-                    degrees=hyp["degrees"],
-                    translate=hyp["translate"],
-                    scale=hyp["scale"],
-                    shear=hyp["shear"],
-                    perspective=hyp["perspective"],
-                )
+                if self.augment:
+                    raise NotImplementedError('Please make data augmentation work!')
 
-                # ✅ RGB-T Albumentations (각 모달리티별로 동일한 변환 적용)
-                if hasattr(self, 'albumentations') and self.albumentations:
-                    # 동일한 시드로 두 이미지에 같은 변환 적용
-                    random_state = random.getstate()
-                    
-                    augmented_imgs = []
-                    for img in imgs:
-                        random.setstate(random_state)  # 동일한 랜덤 상태 적용
-                        img, labels = self.albumentations(img, labels)
-                        augmented_imgs.append(img)
-                    imgs = augmented_imgs
+                    img, labels = random_perspective(
+                        img,
+                        labels,
+                        degrees=hyp["degrees"],
+                        translate=hyp["translate"],
+                        scale=hyp["scale"],
+                        shear=hyp["shear"],
+                        perspective=hyp["perspective"],
+                    )
 
-                # ✅ HSV color-space (RGB에만 적용, Thermal은 제외)
-                # RGB 이미지 (visible)에만 HSV 증강 적용
-                if len(imgs) > 1:  # visible 모달리티가 있는 경우
-                    augment_hsv(imgs[1], hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
+                nl = len(labels)  # number of labels
+                if nl:
+                    labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
 
-                # ✅ Flip up-down (모든 모달리티에 동일하게 적용)
-                if random.random() < hyp["flipud"]:
-                    for i in range(len(imgs)):
-                        imgs[i] = np.flipud(imgs[i])
-                    if len(labels):
-                        labels[:, 2] = 1 - labels[:, 2]
+                if self.augment:
+                    # Albumentations
+                    img, labels = self.albumentations(img, labels)
+                    nl = len(labels)  # update after albumentations
 
-                # ✅ Flip left-right (모든 모달리티에 동일하게 적용)
-                if random.random() < hyp["fliplr"]:
-                    for i in range(len(imgs)):
-                        imgs[i] = np.fliplr(imgs[i])
-                    if len(labels):
-                        labels[:, 1] = 1 - labels[:, 1]
+                    # HSV color-space
+                    augment_hsv(img, hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
 
-                # ✅ Cutouts (각 모달리티별로 적용)
-                # labels = cutout(imgs, labels, p=0.5)  # RGB-T용 cutout 구현 필요시
+                    # Flip up-down
+                    if random.random() < hyp["flipud"]:
+                        img = np.flipud(img)
+                        if nl:
+                            labels[:, 2] = 1 - labels[:, 2]
 
-            nl = len(labels)  # number of labels
-            if nl:
-                labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=imgs[0].shape[1], h=imgs[0].shape[0], clip=True, eps=1e-3)
+                    # Flip left-right
+                    if random.random() < hyp["fliplr"]:
+                        img = np.fliplr(img)
+                        if nl:
+                            labels[:, 1] = 1 - labels[:, 1]
 
-        # 공통 처리: labels_out 생성
-        nl = len(labels)
-        labels_out = torch.zeros((nl, 7 if labels.shape[1] > 5 else 6))
-        if nl:
-            labels_out[:, 1:labels.shape[1]+1] = torch.from_numpy(labels)
+                    # Cutouts
+                    # labels = cutout(img, labels, p=0.5)
+                    # nl = len(labels)  # update after cutout
 
-        # Convert each modality
-        converted_imgs = []
-        for img in imgs:
-            # Convert
-            img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
-            img = np.ascontiguousarray(img)
-            converted_imgs.append(torch.from_numpy(img))
-        
-        imgs = converted_imgs
+                labels_out = torch.zeros((nl, 7))
+                if nl:
+                    labels_out[:, 1:] = torch.from_numpy(labels)
 
-        # Drop occlusion level if exists
-        if labels_out.shape[1] > 6:
-            labels_out = labels_out[:, :-1]
-        
+                # Convert
+                img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+                img = np.ascontiguousarray(img)
+
+                imgs[ii] = torch.from_numpy(img)
+
+        # Drop occlusion level
+        labels_out = labels_out[:, :-1]
         return imgs, labels_out, self.im_files[index], shapes, index
 
     def load_image(self, i):
