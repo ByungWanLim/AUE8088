@@ -1096,8 +1096,8 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         super().__init__(path, **kwargs)
 
         # TODO: make mosaic augmentation work
-        # self.mosaic = False
-        self.mosaic = True
+        self.mosaic = False
+        # self.mosaic = True
 
         # Set ignore flag
         cond = self.ignore_settings['train' if is_train else 'test']

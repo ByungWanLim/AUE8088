@@ -1,6 +1,6 @@
 # Learning parameters
-lr0: 0.01              # initial learning rate
-lrf: 0.01              # final learning rate multiplier
+lr0: 0.01              # initial learning rate          lr0: 0.01
+lrf: 0.01              # final learning rate multiplier lrf: 0.1
 momentum: 0.937
 weight_decay: 0.0005
 warmup_epochs: 3.0
@@ -9,15 +9,15 @@ warmup_bias_lr: 0.1
 
 # Loss balance
 box: 0.05
-cls: 0.5
+cls: 0.5 # Classification loss gain                      cls: 0.3
 cls_pw: 1.0
-obj: 1.0
-obj_pw: 1.0
-iou_t: 0.25            # IoU training threshold
+obj: 1.0 # obj loss gain (scale with pixels)             obj: 0.7
+obj_pw: 1.0 
+iou_t: 0.25            # IoU training threshold          iou_t: 0.20
 anchor_t: 4.0          # anchor-matching IoU threshold
 fl_gamma: 0.0          # focal loss gamma
 
-# Color augmentation (RGB만 적용됨)
+# Color augmentation (RGB)
 hsv_h: 0.015
 hsv_s: 0.5
 hsv_v: 0.3
