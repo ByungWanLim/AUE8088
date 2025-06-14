@@ -299,6 +299,13 @@ def mixup(im, labels, im2, labels2):
     labels = np.concatenate((labels, labels2), 0)
     return im, labels
 
+def mixup_rgbt(imgs1, labels1, imgs2, labels2):
+    """MixUp for RGBT: apply same mixing ratio to both RGB/IR pairs"""
+    r = np.random.beta(32.0, 32.0)
+    img_ir = (imgs1[0] * r + imgs2[0] * (1 - r)).astype(np.uint8)
+    img_rgb = (imgs1[1] * r + imgs2[1] * (1 - r)).astype(np.uint8)
+    labels = np.concatenate((labels1, labels2), 0)
+    return [img_ir, img_rgb], labels
 
 def box_candidates(box1, box2, wh_thr=2, ar_thr=100, area_thr=0.1, eps=1e-16):
     """

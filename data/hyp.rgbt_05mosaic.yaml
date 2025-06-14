@@ -34,7 +34,7 @@ flipud: 0.0
 fliplr: 0.5
 
 # Advanced augmentation
-mosaic: 1.0
+mosaic: 0.5
 # mixup: 0.1
 mixup: 0.0
 copy_paste: 0.1

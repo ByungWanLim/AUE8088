@@ -34,6 +34,7 @@ from utils.augmentations import (
     copy_paste,
     letterbox,
     mixup,
+    mixup_rgbt,
     random_perspective,
     random_perspective_rgbt,
 )
@@ -1096,8 +1097,8 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         super().__init__(path, **kwargs)
 
         # TODO: make mosaic augmentation work
-        self.mosaic = False
-        # self.mosaic = True
+        # self.mosaic = False
+        self.mosaic = is_train  # mosaic augmentation
 
         # Set ignore flag
         cond = self.ignore_settings['train' if is_train else 'test']
@@ -1173,6 +1174,8 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
         if cache_images == "ram" and not self.check_cache_ram(prefix=prefix):
             cache_images = False
         self.ims = [(None, None)] * n
+        self.im_hw0 = [(None, None)] * n  # 항상 초기화
+        self.im_hw = [(None, None)] * n   # 항상 초기화
         self.npy_files = [[Path(f.format(m)).with_suffix(".npy") for m in self.modalities] for f in self.im_files]
         if cache_images:
             b, gb = 0, 1 << 30  # bytes of cached images, bytes per gigabytes
@@ -1210,7 +1213,14 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
             # TODO: MixUp augmentation
             if random.random() < hyp["mixup"]:
-                img, labels = mixup(img, labels, *self.load_mosaic_rgbt(random.choice(self.indices)))
+                img, labels = mixup_rgbt(img, labels, *self.load_mosaic_rgbt(random.choice(self.indices)))
+
+            nl = len(labels)
+            labels_out = torch.zeros((nl, 7))
+            if nl:
+                labels_out[:, 1:] = torch.from_numpy(labels)
+
+            imgs = [torch.from_numpy(im.transpose((2, 0, 1))[::-1].copy()) for im in img]
 
         else:
             # Load images
@@ -1324,30 +1334,27 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
             return imgs, (h0s, w0s), img_shapes
 
         return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
-    
+
+
     def load_mosaic_rgbt(self, index):
-        # Mosaic 4 images
+        """RGBT 데이터에 대한 Mosaic augmentation (4개 이미지 조합) - 완전 수정된 버전"""
         labels4 = []
         s = self.img_size
         yc, xc = [int(random.uniform(s * 0.5, s * 1.5)) for _ in range(2)]  # mosaic center x, y
-        # indices = [index] + [random.randint(0, len(self.labels) - 1) for _ in range(3)]  # 3 additional image indices
         indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
-        random.shuffle(indices)
+        # random.shuffle(indices)
 
         # Placeholders for final images
         mosaic_rgb = np.full((s * 2, s * 2, 3), 114, dtype=np.uint8)
         mosaic_ir = np.full((s * 2, s * 2, 3), 114, dtype=np.uint8)
 
-        hyp = self.hyp
-
         for i, index in enumerate(indices):
             # Load image pair
             imgs, hw0s, hw1s = self.load_image(index)
             img_ir, img_rgb = imgs
-            h0, w0 = hw0s[1]  # use RGB shape
-            h, w = hw1s[1]
+            h, w = img_rgb.shape[:2]  # resized RGB shape
 
-            # Calculate mosaic coordinates
+            # Calculate mosaic placement coordinates
             if i == 0:  # top left
                 x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc
                 x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h
@@ -1359,45 +1366,86 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
                 x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
             else:  # bottom right
                 x1a, y1a, x2a, y2a = xc, yc, min(xc + w, s * 2), min(s * 2, yc + h)
-                x1b, y1b, x2b, y2b = 0, 0, x2a - x1a, y2a - y1a
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(h, y2a - y1a)
 
-            
-
-            # Paste images
             mosaic_rgb[y1a:y2a, x1a:x2a] = img_rgb[y1b:y2b, x1b:x2b]
             mosaic_ir[y1a:y2a, x1a:x2a] = img_ir[y1b:y2b, x1b:x2b]
 
-            # Adjust labels
-            padw = x1a - x1b
-            padh = y1a - y1b
-
-            # Labels
+            # Process labels
             labels = self.labels[index].copy()
             if labels.size:
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
-            labels4.append(labels)
+                # Convert normalized xywh to pixel coordinates for current image
+                labels_pixel = labels.copy()
+                # Convert from normalized xywh to normalized xyxy
+                labels_pixel[:, 1] = labels[:, 1] - labels[:, 3] / 2  # x_center - width/2 = x_min
+                labels_pixel[:, 2] = labels[:, 2] - labels[:, 4] / 2  # y_center - height/2 = y_min
+                labels_pixel[:, 3] = labels[:, 1] + labels[:, 3]   # x_center + width/2 = x_max
+                labels_pixel[:, 4] = labels[:, 2] + labels[:, 4]   # y_center + height/2 = y_max
+                
+                # Scale to actual image size
+                labels_pixel[:, 1] *= w  # x_min
+                labels_pixel[:, 2] *= h  # y_min
+                labels_pixel[:, 3] *= w  # x_max
+                labels_pixel[:, 4] *= h  # y_max
+                
+                # Adjust for mosaic placement
+                padw = x1a - x1b
+                padh = y1a - y1b
+                labels_pixel[:, 1] += padw  # x_min
+                labels_pixel[:, 2] += padh  # y_min
+                labels_pixel[:, 3] += padw  # x_max
+                labels_pixel[:, 4] += padh  # y_max
+                
+                labels4.append(labels_pixel)
 
-        # Concat/clip labels
+        # Concatenate and clip labels
         if labels4:
             labels4 = np.concatenate(labels4, 0)
-            np.clip(labels4[:, 1:], 0, s * 2, out=labels4[:, 1:])  # clip boxes
+            # Clip to mosaic boundaries
+            np.clip(labels4[:, 1:], 0, s * 2, out=labels4[:, 1:])
+            
+            # Filter out boxes that are too small after clipping
+            box_w = labels4[:, 3] - labels4[:, 1]
+            box_h = labels4[:, 4] - labels4[:, 2]
+            valid_boxes = (box_w > 2) & (box_h > 2)
+            labels4 = labels4[valid_boxes]
 
-        # Resize final images to original size
-        final_rgb, _, _ = letterbox(mosaic_rgb, self.img_size, auto=False)
-        final_ir, _, _ = letterbox(mosaic_ir, self.img_size, auto=False)
-        img_rgb, img_ir, labels4, _ = random_perspective_rgbt(
-                    img_rgb=final_rgb, 
-                    img_ir=final_ir, 
-                    targets_rgb=labels4, 
-                    targets_ir=labels4,
-                    degrees=hyp["degrees"],
-                    translate=hyp["translate"],
-                    scale=hyp["scale"],
-                    shear=hyp["shear"],
-                    perspective=hyp["perspective"],
-                )
+        # Apply letterbox to resize to target size
+        img_rgb, ratio, pad = letterbox(mosaic_rgb, self.img_size, auto=False, scaleup=False)
+        img_ir, _, _ = letterbox(mosaic_ir, self.img_size, auto=False, scaleup=False)
+
+        # Adjust labels for letterbox transformation
+        if len(labels4):
+            # Scale labels according to letterbox ratio
+            labels4[:, 1] = labels4[:, 1] * ratio[0] + pad[0]  # x_min
+            labels4[:, 2] = labels4[:, 2] * ratio[1] + pad[1]  # y_min
+            labels4[:, 3] = labels4[:, 3] * ratio[0] + pad[0]  # x_max
+            labels4[:, 4] = labels4[:, 4] * ratio[1] + pad[1]  # y_max
+            
+            # Convert back to normalized xywh format
+            img_h, img_w = img_rgb.shape[:2]
+            labels4[:, 1] /= img_w  # normalize x_min
+            labels4[:, 2] /= img_h  # normalize y_min
+            labels4[:, 3] /= img_w  # normalize x_max
+            labels4[:, 4] /= img_h  # normalize y_max
+            
+            # Convert from xyxy to xywh
+            x_center = (labels4[:, 1] + labels4[:, 3]) / 2
+            y_center = (labels4[:, 2] + labels4[:, 4]) / 2
+            width = labels4[:, 3] - labels4[:, 1]
+            height = labels4[:, 4] - labels4[:, 2]
+            
+            labels4[:, 1] = x_center
+            labels4[:, 2] = y_center
+            labels4[:, 3] = width
+            labels4[:, 4] = height
+            
+            # Final clipping to ensure values are in [0, 1]
+            labels4[:, 1:] = np.clip(labels4[:, 1:], 0, 1)
+        else:
+            labels4 = np.zeros((0, 5))  # Empty labels array
+
         imgs = [img_ir, img_rgb]
-
         return imgs, labels4
 
 

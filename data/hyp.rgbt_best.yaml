@@ -25,7 +25,7 @@ hsv_v: 0.3
 # Geometric augmentation
 degrees: 0.0
 translate: 0.1
-scale: 0.25
+scale: 0.5
 shear: 0.0
 perspective: 0.0
 
@@ -34,7 +34,9 @@ flipud: 0.0
 fliplr: 0.5
 
 # Advanced augmentation
-mosaic: 1.0
-mixup: 0.1
+# mosaic: 1.0
+mosaic: 0.0
+# mixup: 0.1
+mixup: 0.0
 copy_paste: 0.1
 cutout: 0.5
