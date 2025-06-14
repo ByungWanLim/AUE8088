@@ -287,7 +287,7 @@ class CrossConv(nn.Module):
 class C3(nn.Module):
     """CSP Bottleneck with 3 convolutions."""
 
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e: float = 0.5):
         """
         Initialize the CSP Bottleneck with 3 convolutions.
 
@@ -1189,7 +1189,7 @@ class Classify(nn.Module):
 class C3k(C3):
     """C3k is a CSP bottleneck module with customizable kernel sizes for feature extraction in neural networks."""
 
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=1, k=3):
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e: float = 0.5, k=3):
         """
         Initialize C3k module.
 
@@ -1211,7 +1211,7 @@ class C3k(C3):
 class C2f(nn.Module):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=1):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e: float = 0.5):
         """
         Initialize a CSP bottleneck with 2 convolutions.
 
@@ -1246,7 +1246,7 @@ class C2f(nn.Module):
 class C3k2(C2f):
     """Faster Implementation of CSP Bottleneck with 2 convolutions."""
 
-    def __init__(self, c1, c2, n=1, c3k=False, e=1, g=1, shortcut=True):
+    def __init__(self, c1, c2, n=1, c3k=False, e: float = 0.5, g=1, shortcut=True):
         """
         Initialize C3k2 module.
 
