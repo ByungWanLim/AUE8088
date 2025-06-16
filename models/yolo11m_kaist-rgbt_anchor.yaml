@@ -2,15 +2,15 @@
 
 # Parameters
 nc: 1  # number of classes
-depth_multiple: 1.0
-width_multiple: 1.5
+depth_multiple: 0.5
+width_multiple: 1.0
 max_channels: 512
 # scales:
 #   n: [0.50, 0.25, 1024]
 anchors:
-  - [10, 13, 16, 30, 33, 23]
-  - [30, 61, 62, 45, 59, 119]
-  - [116, 90, 156, 198, 373, 326]
+  - [6, 14, 10, 22, 14, 32]        # P3/8 - 사람 비율 2.3:1
+  - [20, 46, 28, 64, 40, 92]       # P4/16 - 사람 비율 2.3:1  
+  - [56, 128, 80, 184, 112, 256]   # P5/32 - 사람 비율 2.3:1
 
 # RGBT backbone
 backbone:

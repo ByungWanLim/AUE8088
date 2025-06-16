@@ -89,6 +89,67 @@ class Conv(nn.Module):
         """Applies a fused convolution and activation function to the input tensor `x`."""
         return self.act(self.conv(x))
 
+class Conv2(Conv):
+    """
+    Simplified RepConv module with Conv fusing.
+
+    Attributes:
+        conv (nn.Conv2d): Main 3x3 convolutional layer.
+        cv2 (nn.Conv2d): Additional 1x1 convolutional layer.
+        bn (nn.BatchNorm2d): Batch normalization layer.
+        act (nn.Module): Activation function layer.
+    """
+
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, d=1, act=True):
+        """
+        Initialize Conv2 layer with given parameters.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            k (int): Kernel size.
+            s (int): Stride.
+            p (int, optional): Padding.
+            g (int): Groups.
+            d (int): Dilation.
+            act (bool | nn.Module): Activation function.
+        """
+        super().__init__(c1, c2, k, s, p, g=g, d=d, act=act)
+        self.cv2 = nn.Conv2d(c1, c2, 1, s, autopad(1, p, d), groups=g, dilation=d, bias=False)  # add 1x1 conv
+
+    def forward(self, x):
+        """
+        Apply convolution, batch normalization and activation to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        return self.act(self.bn(self.conv(x) + self.cv2(x)))
+
+    def forward_fuse(self, x):
+        """
+        Apply fused convolution, batch normalization and activation to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        return self.act(self.bn(self.conv(x)))
+
+    def fuse_convs(self):
+        """Fuse parallel convolutions."""
+        w = torch.zeros_like(self.conv.weight.data)
+        i = [x // 2 for x in w.shape[2:]]
+        w[:, :, i[0] : i[0] + 1, i[1] : i[1] + 1] = self.cv2.weight.data.clone()
+        self.conv.weight.data += w
+        self.__delattr__("cv2")
+        self.forward = self.forward_fuse
+
 
 class MultiStreamConv(nn.Module):
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True, num_streams=2):
@@ -1434,3 +1495,114 @@ class Attention(nn.Module):
         x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
         x = self.proj(x)
         return x
+
+class ChannelAttention(nn.Module):
+    """
+    Channel-attention module for feature recalibration.
+
+    Applies attention weights to channels based on global average pooling.
+
+    Attributes:
+        pool (nn.AdaptiveAvgPool2d): Global average pooling.
+        fc (nn.Conv2d): Fully connected layer implemented as 1x1 convolution.
+        act (nn.Sigmoid): Sigmoid activation for attention weights.
+
+    References:
+        https://github.com/open-mmlab/mmdetection/tree/v3.0.0rc1/configs/rtmdet
+    """
+
+    def __init__(self, channels: int) -> None:
+        """
+        Initialize Channel-attention module.
+
+        Args:
+            channels (int): Number of input channels.
+        """
+        super().__init__()
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Conv2d(channels, channels, 1, 1, 0, bias=True)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Apply channel attention to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Channel-attended output tensor.
+        """
+        return x * self.act(self.fc(self.pool(x)))
+
+
+class SpatialAttention(nn.Module):
+    """
+    Spatial-attention module for feature recalibration.
+
+    Applies attention weights to spatial dimensions based on channel statistics.
+
+    Attributes:
+        cv1 (nn.Conv2d): Convolution layer for spatial attention.
+        act (nn.Sigmoid): Sigmoid activation for attention weights.
+    """
+
+    def __init__(self, kernel_size=7):
+        """
+        Initialize Spatial-attention module.
+
+        Args:
+            kernel_size (int): Size of the convolutional kernel (3 or 7).
+        """
+        super().__init__()
+        assert kernel_size in {3, 7}, "kernel size must be 3 or 7"
+        padding = 3 if kernel_size == 7 else 1
+        self.cv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x):
+        """
+        Apply spatial attention to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Spatial-attended output tensor.
+        """
+        return x * self.act(self.cv1(torch.cat([torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]], 1)))
+    
+class CBAM(nn.Module):
+    """
+    Convolutional Block Attention Module.
+
+    Combines channel and spatial attention mechanisms for comprehensive feature refinement.
+
+    Attributes:
+        channel_attention (ChannelAttention): Channel attention module.
+        spatial_attention (SpatialAttention): Spatial attention module.
+    """
+
+    def __init__(self, c1, kernel_size=7):
+        """
+        Initialize CBAM with given parameters.
+
+        Args:
+            c1 (int): Number of input channels.
+            kernel_size (int): Size of the convolutional kernel for spatial attention.
+        """
+        super().__init__()
+        self.channel_attention = ChannelAttention(c1)
+        self.spatial_attention = SpatialAttention(kernel_size)
+
+    def forward(self, x):
+        """
+        Apply channel and spatial attention sequentially to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Attended output tensor.
+        """
+        return self.spatial_attention(self.channel_attention(x))

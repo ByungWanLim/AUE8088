@@ -266,3 +266,67 @@ class ComputeLoss:
             tcls.append(c)  # class
 
         return tcls, tbox, indices, anch
+    
+    def build_targets_2(self, p, targets):
+        """Modified to use center-in-box matching (anchor center inside GT box)."""
+        na, nt = self.na, targets.shape[0]
+        tcls, tbox, indices, anch = [], [], [], []
+        gain = torch.ones(7, device=self.device)
+        ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)
+        targets = torch.cat((targets.repeat(na, 1, 1), ai[..., None]), 2)
+
+        g = 0.5
+        off = (
+            torch.tensor([[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1]], device=self.device).float() * g
+        )
+
+        for i in range(self.nl):
+            anchors, shape = self.anchors[i], p[i].shape
+            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
+            t = targets * gain  # (na, nt, 7)
+
+            if nt:
+                # Compute grid-aligned GT center
+                gxy = t[..., 2:4]  # GT center (x,y)
+                gwh = t[..., 4:6]  # GT width, height
+                grid_wh = torch.tensor([shape[3], shape[2]], device=self.device).float()  # (nx, ny)
+                grid_xy = gxy
+
+                # Anchor center locations on grid
+                anchor_cxcy = gxy  # we assume anchors centered on gxy
+
+                # Define GT box corners in grid units
+                half_wh = gwh / 2
+                gt_x1y1 = gxy - half_wh
+                gt_x2y2 = gxy + half_wh
+
+                # Center-in-box condition: anchor center inside GT box
+                inside_x = (anchor_cxcy[..., 0] >= gt_x1y1[..., 0]) & (anchor_cxcy[..., 0] <= gt_x2y2[..., 0])
+                inside_y = (anchor_cxcy[..., 1] >= gt_x1y1[..., 1]) & (anchor_cxcy[..., 1] <= gt_x2y2[..., 1])
+                j = inside_x & inside_y
+
+                t = t[j]  # keep only matches where anchor center is inside GT box
+
+                # Offsets
+                gxy = t[:, 2:4]
+                gxi = gain[[2, 3]] - gxy
+                j, k = ((gxy % 1 < g) & (gxy > 1)).T
+                l, m = ((gxi % 1 < g) & (gxi > 1)).T
+                j = torch.stack((torch.ones_like(j), j, k, l, m))
+                t = t.repeat((5, 1, 1))[j]
+                offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]
+            else:
+                t = targets[0]
+                offsets = 0
+
+            bc, gxy, gwh, a = t.chunk(4, 1)
+            a, (b, c) = a.long().view(-1), bc.long().T
+            gij = (gxy - offsets).long()
+            gi, gj = gij.T
+
+            indices.append((b, a, gj.clamp_(0, shape[2] - 1), gi.clamp_(0, shape[3] - 1)))
+            tbox.append(torch.cat((gxy - gij, gwh), 1))
+            anch.append(anchors[a])
+            tcls.append(c)
+
+        return tcls, tbox, indices, anch

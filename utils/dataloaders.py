@@ -1221,7 +1221,7 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
                 labels_out[:, 1:] = torch.from_numpy(labels)
 
             imgs = [torch.from_numpy(im.transpose((2, 0, 1))[::-1].copy()) for im in img]
-
+            
         else:
             # Load images
             # hw0s: original shapes, hw1s: resized shapes
@@ -1335,14 +1335,12 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
         return self.ims[i], self.im_hw0[i], self.im_hw[i]  # im, hw_original, hw_resized
 
-
     def load_mosaic_rgbt(self, index):
-        """RGBT 데이터에 대한 Mosaic augmentation (4개 이미지 조합) - 완전 수정된 버전"""
+        """RGBT 데이터에 대한 Mosaic augmentation (4개 이미지 조합) - 수정된 버전"""
         labels4 = []
         s = self.img_size
         yc, xc = [int(random.uniform(s * 0.5, s * 1.5)) for _ in range(2)]  # mosaic center x, y
         indices = [index] + random.choices(self.indices, k=3)  # 3 additional image indices
-        # random.shuffle(indices)
 
         # Placeholders for final images
         mosaic_rgb = np.full((s * 2, s * 2, 3), 114, dtype=np.uint8)
@@ -1376,18 +1374,19 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
             if labels.size:
                 # Convert normalized xywh to pixel coordinates for current image
                 labels_pixel = labels.copy()
-                # Convert from normalized xywh to normalized xyxy
                 labels_pixel[:, 1] = labels[:, 1] - labels[:, 3] / 2  # x_center - width/2 = x_min
                 labels_pixel[:, 2] = labels[:, 2] - labels[:, 4] / 2  # y_center - height/2 = y_min
-                labels_pixel[:, 3] = labels[:, 1] + labels[:, 3]   # x_center + width/2 = x_max
-                labels_pixel[:, 4] = labels[:, 2] + labels[:, 4]   # y_center + height/2 = y_max
-                
+                labels_pixel[:, 3] = labels[:, 1] + labels[:, 3]      # x_center + width/2 = x_max
+                labels_pixel[:, 4] = labels[:, 2] + labels[:, 4]      # y_center + height/2 = y_max
+                # labels_pixel[:, 3] = labels[:, 1] + labels[:, 3] / 2  # x_center + width/2 = x_max
+                # labels_pixel[:, 4] = labels[:, 2] + labels[:, 4] / 2  # y_center + height/2 = y_max
+
                 # Scale to actual image size
                 labels_pixel[:, 1] *= w  # x_min
                 labels_pixel[:, 2] *= h  # y_min
                 labels_pixel[:, 3] *= w  # x_max
                 labels_pixel[:, 4] *= h  # y_max
-                
+
                 # Adjust for mosaic placement
                 padw = x1a - x1b
                 padh = y1a - y1b
@@ -1395,15 +1394,14 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
                 labels_pixel[:, 2] += padh  # y_min
                 labels_pixel[:, 3] += padw  # x_max
                 labels_pixel[:, 4] += padh  # y_max
-                
+
                 labels4.append(labels_pixel)
 
         # Concatenate and clip labels
         if labels4:
             labels4 = np.concatenate(labels4, 0)
-            # Clip to mosaic boundaries
             np.clip(labels4[:, 1:], 0, s * 2, out=labels4[:, 1:])
-            
+
             # Filter out boxes that are too small after clipping
             box_w = labels4[:, 3] - labels4[:, 1]
             box_h = labels4[:, 4] - labels4[:, 2]
@@ -1416,30 +1414,30 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
         # Adjust labels for letterbox transformation
         if len(labels4):
-            # Scale labels according to letterbox ratio
             labels4[:, 1] = labels4[:, 1] * ratio[0] + pad[0]  # x_min
             labels4[:, 2] = labels4[:, 2] * ratio[1] + pad[1]  # y_min
             labels4[:, 3] = labels4[:, 3] * ratio[0] + pad[0]  # x_max
             labels4[:, 4] = labels4[:, 4] * ratio[1] + pad[1]  # y_max
-            
+
             # Convert back to normalized xywh format
             img_h, img_w = img_rgb.shape[:2]
+           
             labels4[:, 1] /= img_w  # normalize x_min
             labels4[:, 2] /= img_h  # normalize y_min
             labels4[:, 3] /= img_w  # normalize x_max
             labels4[:, 4] /= img_h  # normalize y_max
-            
+
             # Convert from xyxy to xywh
             x_center = (labels4[:, 1] + labels4[:, 3]) / 2
             y_center = (labels4[:, 2] + labels4[:, 4]) / 2
             width = labels4[:, 3] - labels4[:, 1]
             height = labels4[:, 4] - labels4[:, 2]
-            
+
             labels4[:, 1] = x_center
             labels4[:, 2] = y_center
             labels4[:, 3] = width
             labels4[:, 4] = height
-            
+
             # Final clipping to ensure values are in [0, 1]
             labels4[:, 1:] = np.clip(labels4[:, 1:], 0, 1)
         else:
@@ -1447,7 +1445,6 @@ class LoadRGBTImagesAndLabels(LoadImagesAndLabels):
 
         imgs = [img_ir, img_rgb]
         return imgs, labels4
-
 
     @staticmethod
     def collate_fn(batch):

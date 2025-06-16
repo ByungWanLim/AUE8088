@@ -334,6 +334,8 @@ def parse_model(d, ch):
     na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
+    # max_channels = d.get("max_channels", 1024)
+
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
         m = eval(m) if isinstance(m, str) else m  # eval strings
@@ -368,6 +370,8 @@ def parse_model(d, ch):
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
+                # max_c = d.get("max_channels", 1024)  # max channels
+                # c2 = min(make_divisible(c2 * gw, ch_mul), max_channels)
                 c2 = make_divisible(c2 * gw, ch_mul)
 
             args = [c1, c2, *args[1:]]

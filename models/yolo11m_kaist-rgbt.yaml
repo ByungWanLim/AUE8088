@@ -2,8 +2,8 @@
 
 # Parameters
 nc: 1  # number of classes
-depth_multiple: 1.0
-width_multiple: 1.5
+depth_multiple: 0.5
+width_multiple: 1.0
 max_channels: 512
 # scales:
 #   n: [0.50, 0.25, 1024]

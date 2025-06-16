@@ -88,6 +88,67 @@ class Conv(nn.Module):
     def forward_fuse(self, x):
         """Applies a fused convolution and activation function to the input tensor `x`."""
         return self.act(self.conv(x))
+    
+class Conv2(Conv):
+    """
+    Simplified RepConv module with Conv fusing.
+
+    Attributes:
+        conv (nn.Conv2d): Main 3x3 convolutional layer.
+        cv2 (nn.Conv2d): Additional 1x1 convolutional layer.
+        bn (nn.BatchNorm2d): Batch normalization layer.
+        act (nn.Module): Activation function layer.
+    """
+
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, d=1, act=True):
+        """
+        Initialize Conv2 layer with given parameters.
+
+        Args:
+            c1 (int): Number of input channels.
+            c2 (int): Number of output channels.
+            k (int): Kernel size.
+            s (int): Stride.
+            p (int, optional): Padding.
+            g (int): Groups.
+            d (int): Dilation.
+            act (bool | nn.Module): Activation function.
+        """
+        super().__init__(c1, c2, k, s, p, g=g, d=d, act=act)
+        self.cv2 = nn.Conv2d(c1, c2, 1, s, autopad(1, p, d), groups=g, dilation=d, bias=False)  # add 1x1 conv
+
+    def forward(self, x):
+        """
+        Apply convolution, batch normalization and activation to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        return self.act(self.bn(self.conv(x) + self.cv2(x)))
+
+    def forward_fuse(self, x):
+        """
+        Apply fused convolution, batch normalization and activation to input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            (torch.Tensor): Output tensor.
+        """
+        return self.act(self.bn(self.conv(x)))
+
+    def fuse_convs(self):
+        """Fuse parallel convolutions."""
+        w = torch.zeros_like(self.conv.weight.data)
+        i = [x // 2 for x in w.shape[2:]]
+        w[:, :, i[0] : i[0] + 1, i[1] : i[1] + 1] = self.cv2.weight.data.clone()
+        self.conv.weight.data += w
+        self.__delattr__("cv2")
+        self.forward = self.forward_fuse
 
 
 class MultiStreamConv(nn.Module):
@@ -1227,6 +1288,7 @@ class C2f(nn.Module):
         self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
+        # self.cv2 = None
         self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=((3, 3), (3, 3)), e=1.0) for _ in range(n))
 
     def forward(self, x):
@@ -1234,6 +1296,17 @@ class C2f(nn.Module):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+    # def forward(self, x):
+    #     y = list(self.cv1(x).chunk(2, 1))  # [y0, y1]
+    #     for m in self.m:
+    #         y.append(m(y[-1]))            # [y0, y1, m1, m2, ...]
+
+    #     y_cat = torch.cat(y, dim=1)
+    #     if self.cv2 is None or y_cat.shape[1] != self.cv2.conv.in_channels:
+    #         # 동적으로 생성 (최초 또는 사이즈 mismatch 발생 시)
+    #         self.cv2 = Conv(y_cat.shape[1], self.c * 2, 1, 1).to(y_cat.device)
+
+    #     return self.cv2(y_cat)
 
     def forward_split(self, x):
         """Forward pass using split() instead of chunk()."""
