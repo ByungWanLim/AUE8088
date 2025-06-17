@@ -387,15 +387,33 @@ class MultiStreamC3(nn.Module):
         return [_layer(_x) for _x, _layer in zip(x, self.c3_layers)]
 
 
+# class C3x(C3):
+#     # C3 module with cross-convolutions
+#     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+#         """Initializes C3x module with cross-convolutions, extending C3 with customizable channel dimensions, groups,
+#         and expansion.
+#         """
+#         super().__init__(c1, c2, n, shortcut, g, e)
+#         c_ = int(c2 * e)
+
 class C3x(C3):
-    # C3 module with cross-convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        """Initializes C3x module with cross-convolutions, extending C3 with customizable channel dimensions, groups,
-        and expansion.
+    """C3 module with cross-convolutions."""
+
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = True, g: int = 1, e: float = 0.5):
+        """
+        Initialize C3 module with cross-convolutions.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            n (int): Number of Bottleneck blocks.
+            shortcut (bool): Whether to use shortcut connections.
+            g (int): Groups for convolutions.
+            e (float): Expansion ratio.
         """
         super().__init__(c1, c2, n, shortcut, g, e)
-        c_ = int(c2 * e)
-        self.m = nn.Sequential(*(CrossConv(c_, c_, 3, 1, g, 1.0, shortcut) for _ in range(n)))
+        self.c_ = int(c2 * e)
+        self.m = nn.Sequential(*(Bottleneck(self.c_, self.c_, shortcut, g, k=((1, 3), (3, 1)), e=1) for _ in range(n)))
 
 
 class C3TR(C3):
@@ -449,14 +467,44 @@ class SPP(nn.Module):
             return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
 
 
-class SPPF(nn.Module):
-    # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher
-    def __init__(self, c1, c2, k=5):
-        """
-        Initializes YOLOv5 SPPF layer with given channels and kernel size for YOLOv5 model, combining convolution and
-        max pooling.
+# class SPPF(nn.Module):
+#     # Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher
+#     def __init__(self, c1, c2, k=5):
+#         """
+#         Initializes YOLOv5 SPPF layer with given channels and kernel size for YOLOv5 model, combining convolution and
+#         max pooling.
 
-        Equivalent to SPP(k=(5, 9, 13)).
+#         Equivalent to SPP(k=(5, 9, 13)).
+#         """
+#         super().__init__()
+#         c_ = c1 // 2  # hidden channels
+#         self.cv1 = Conv(c1, c_, 1, 1)
+#         self.cv2 = Conv(c_ * 4, c2, 1, 1)
+#         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+
+#     def forward(self, x):
+#         """Processes input through a series of convolutions and max pooling operations for feature extraction."""
+#         x = self.cv1(x)
+#         with warnings.catch_warnings():
+#             warnings.simplefilter("ignore")  # suppress torch 1.9.0 max_pool2d() warning
+#             y1 = self.m(x)
+#             y2 = self.m(y1)
+#             return self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
+
+class SPPF(nn.Module):
+    """Spatial Pyramid Pooling - Fast (SPPF) layer for YOLOv5 by Glenn Jocher."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5):
+        """
+        Initialize the SPPF layer with given input/output channels and kernel size.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels.
+            k (int): Kernel size.
+
+        Notes:
+            This module is equivalent to SPP(k=(5, 9, 13)).
         """
         super().__init__()
         c_ = c1 // 2  # hidden channels
@@ -464,14 +512,11 @@ class SPPF(nn.Module):
         self.cv2 = Conv(c_ * 4, c2, 1, 1)
         self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
 
-    def forward(self, x):
-        """Processes input through a series of convolutions and max pooling operations for feature extraction."""
-        x = self.cv1(x)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # suppress torch 1.9.0 max_pool2d() warning
-            y1 = self.m(x)
-            y2 = self.m(y1)
-            return self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply sequential pooling operations to input and return concatenated feature maps."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        return self.cv2(torch.cat(y, 1))
 
 
 class Focus(nn.Module):

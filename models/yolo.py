@@ -53,6 +53,8 @@ from models.common import (
     Fusion,
     C3k2,
     C2PSA,
+    C2f,
+    C3k,
 )
 from models.experimental import MixConv2d
 from utils.autoanchor import check_anchor_order
@@ -367,12 +369,20 @@ def parse_model(d, ch):
             MultiStreamC3,
             C3k2,
             C2PSA,
+            C2f,
+            C3k,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 # max_c = d.get("max_channels", 1024)  # max channels
                 # c2 = min(make_divisible(c2 * gw, ch_mul), max_channels)
                 c2 = make_divisible(c2 * gw, ch_mul)
+            # if m in {C3k2, C2f, C3k}:
+            #     c1 = c1 // 2
+            #     c2 = make_divisible(c2 * gw, ch_mul)  # 그대로 사용 (scaling 위험)
+            # else:
+            #     if c2 != no:
+            #         c2 = make_divisible(c2 * gw, ch_mul)
 
             args = [c1, c2, *args[1:]]
             if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x, MultiStreamC3}:
